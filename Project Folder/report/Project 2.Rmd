@@ -1,0 +1,511 @@
+---
+title: "Project 2"
+output: pdf_document
+---
+
+
+# 1. Data Collection and Exploration
+
+```{r}
+df1 <- read.table(file="/Users/stellapark95/Desktop/STAT154/projects/project2/image_data/image1.txt")
+
+df2 <- read.table(file="/Users/stellapark95/Desktop/STAT154/projects/project2/image_data/image2.txt")
+
+df3 <- read.table(file="/Users/stellapark95/Desktop/STAT154/projects/project2/image_data/image3.txt")
+```
+
+
+
+```{r}
+df <- rbind(df1, df2, df3)
+```
+
+```{r}
+colnames(df) <- c('y', 'x', 'expert', 'ndai', 'sd', 'corr', 'df', 'cf', 'bf', 'af', 'an')
+colnames(df1) <- c('y', 'x', 'expert', 'ndai', 'sd', 'corr', 'df', 'cf', 'bf', 'af', 'an')
+colnames(df2) <- c('y', 'x', 'expert', 'ndai', 'sd', 'corr', 'df', 'cf', 'bf', 'af', 'an')
+colnames(df3) <- c('y', 'x', 'expert', 'ndai', 'sd', 'corr', 'df', 'cf', 'bf', 'af', 'an')
+
+
+```
+
+
+**1(b)**
+
+```{r}
+summary(df)
+```
+
+
+```{r}
+# percentage per class
+print("All")
+dim(subset(df, expert==0))[1] / dim(df)[1]
+dim(subset(df, expert==1))[1] / dim(df)[1]
+dim(subset(df, expert==-1))[1] / dim(df)[1]
+print("1")
+dim(subset(df1, expert==0))[1] / dim(df1)[1]
+dim(subset(df1, expert==1))[1] / dim(df1)[1]
+dim(subset(df1, expert==-1))[1] / dim(df1)[1]
+print("2")
+dim(subset(df2, expert==0))[1] / dim(df2)[1]
+dim(subset(df2, expert==1))[1] / dim(df2)[1]
+dim(subset(df2, expert==-1))[1] / dim(df2)[1]
+print("3")
+dim(subset(df3, expert==0))[1] / dim(df3)[1]
+dim(subset(df3, expert==1))[1] / dim(df3)[1]
+dim(subset(df3, expert==-1))[1] / dim(df3)[1]
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+summary(df)
+```
+
+
+```{r}
+
+
+library(ggplot2)
+
+
+```
+
+
+
+```{r}
+ggplot(df1, aes(x, y)) + geom_point(aes(colour = factor(expert)))
+```
+
+
+
+```{r}
+ggplot(df2, aes(x, y)) + geom_point(aes(colour = factor(expert)))
+```
+
+
+
+
+
+```{r}
+ggplot(df3, aes(x, y)) + geom_point(aes(colour = factor(expert)))
+```
+
+
+
+```{r}
+ggplot(df, aes(x, y)) + geom_point(aes(colour = factor(expert)))
+```
+
+
+
+
+The dataset cannot be iid because the points are correlated to each other. For instance, if one dataset is classified as "cloudy", the dataset near it would be more likely to be classified as "cloudy" as well. 
+
+
+
+
+
+
+
+
+
+**1(c)**
+
+```{r}
+pairs(df1[4:6])
+```
+
+
+
+
+
+
+```{r}
+pairs(df2[4:6])
+```
+
+
+
+
+
+
+
+```{r}
+pairs(df3[4:6])
+```
+
+
+
+
+```{r}
+pairs(df[4:6])
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+df1$expert <- factor(df1$expert)
+ggplot(df1, aes(expert, ndai)) + geom_violin() + geom_boxplot(width=0.1) + stat_summary(fun.y=mean, geom="point", shape=23, size=2, color='red') + ggtitle('Image 1 NDAI vs. Expert Label')
+
+```
+
+
+
+```{r}
+
+df2$expert <- factor(df2$expert)
+ggplot(df2, aes(expert, ndai)) + geom_violin() + geom_boxplot(width=0.1) + stat_summary(fun.y=mean, geom="point", shape=23, size=2, color='red') + ggtitle('Image 2 NDAI vs. Expert Label')
+
+```
+
+
+
+```{r}
+
+df3$expert <- factor(df3$expert)
+ggplot(df3, aes(expert, ndai)) + geom_violin() + geom_boxplot(width=0.1) + stat_summary(fun.y=mean, geom="point", shape=23, size=2, color='red') + ggtitle('Image 3 NDAI vs. Expert Label')
+
+```
+
+
+
+
+
+
+# 2. Preparation
+
+
+**2(a)**
+
+```{r}
+t_df <- subset(x = df, expert==1 | expert==-1)
+t_df1 <- subset(x = df1, expert==1 | expert==-1)
+t_df2 <- subset(x = df2, expert==1 | expert==-1)
+t_df3 <- subset(x = df3, expert==1 | expert==-1)
+
+```
+
+### Split Method 1
+
+```{r}
+library(lattice)
+library(caret)
+```
+
+
+
+
+
+* Image 1
+
+```{r}
+df1_q1 <- subset(x = t_df1, x >= mean(x) & y >= mean(y))
+df1_q2 <- subset(x = t_df1, x < mean(x) & y >= mean(y))
+df1_q3 <- subset(x = t_df1, x < mean(x) & y < mean(y))
+df1_q4 <- subset(x = t_df1, x >= mean(x) & y < mean(y))
+
+```
+
+  * Quadrant 1
+
+```{r}
+set.seed(42)
+df1_q1_i <- createDataPartition(df1_q1$expert, p=0.8, list=FALSE)
+df1_q1_t <- df1_q1[df1_q1_i,]
+df1_q1_test <- df1_q1[-df1_q1_i,]
+
+df1_q1_ti <- createDataPartition(df1_q1_train$expert, p=0.75, list=FALSE)
+df1_q1_train <- df1_q1_t[df1_q1_ti, ]
+df1_q1_val <- df1_q1_t[-df1_q1_ti, ]
+
+```
+
+
+
+
+  * Quadrant 2
+
+```{r}
+set.seed(42)
+df1_q2_i <- createDataPartition(df1_q2$expert, p=0.8, list=FALSE)
+df1_q2_t <- df1_q2[df1_q2_i,]
+df1_q2_test <- df1_q2[-df1_q2_i,]
+
+
+df1_q2_ti <- createDataPartition(df1_q2_train$expert, p=0.75, list=FALSE)
+df1_q2_train <- df1_q2_t[df1_q2_ti, ]
+df1_q2_val <- df1_q2_t[-df1_q2_ti, ]
+
+
+```
+
+  * Quadrant 3
+
+```{r}
+set.seed(42)
+df1_q3_i <- createDataPartition(df1_q3$expert, p=0.8, list=FALSE)
+df1_q3_t <- df1_q3[df1_q3_i,]
+df1_q3_test <- df1_q3[-df1_q3_i,]
+
+df1_q3_ti <- createDataPartition(df1_q3_train$expert, p=0.75, list=FALSE)
+df1_q3_train <- df1_q3_t[df1_q3_ti, ]
+df1_q3_val <- df1_q3_t[-df1_q3_ti, ]
+
+```
+
+  * Quadrant 4
+
+```{r}
+set.seed(42)
+df1_q4_i <- createDataPartition(df1_q4$expert, p=0.8, list=FALSE)
+df1_q4_t <- df1_q4[df1_q4_i,]
+df1_q4_test <- df1_q4[-df1_q4_i,]
+
+df1_q4_ti <- createDataPartition(df1_q4_train$expert, p=0.75, list=FALSE)
+df1_q4_train <- df1_q4_t[df1_q4_ti, ]
+df1_q4_val <- df1_q4_t[-df1_q4_ti, ]
+
+```
+
+
+
+
+* Image 2
+
+```{r}
+df2_q1 <- subset(x = t_df2, x >= mean(x) & y >= mean(y))
+df2_q2 <- subset(x = t_df2, x < mean(x) & y >= mean(y))
+df2_q3 <- subset(x = t_df2, x < mean(x) & y < mean(y))
+df2_q4 <- subset(x = t_df2, x >= mean(x) & y < mean(y))
+
+```
+
+
+  * Quadrant 1
+
+```{r}
+set.seed(42)
+df2_q1_i <- createDataPartition(df2_q1$expert, p=0.8, list=FALSE)
+df2_q1_t <- df2_q1[df2_q1_i,]
+df2_q1_test <- df2_q1[-df2_q1_i,]
+
+df2_q1_ti <- createDataPartition(df2_q1_train$expert, p=0.75, list=FALSE)
+df2_q1_train <- df2_q1_t[df2_q1_ti, ]
+df2_q1_val <- df2_q1_t[-df2_q1_ti, ]
+
+```
+
+
+
+
+
+  * Quadrant 2
+
+```{r}
+set.seed(42)
+df2_q2_i <- createDataPartition(df2_q2$expert, p=0.8, list=FALSE)
+df2_q2_t <- df2_q2[df2_q2_i,]
+df2_q2_test <- df2_q2[-df2_q2_i,]
+
+df2_q2_ti <- createDataPartition(df2_q2_train$expert, p=0.75, list=FALSE)
+df2_q2_train <- df2_q2_t[df2_q2_ti, ]
+df2_q2_val <- df2_q2_t[-df2_q2_ti, ]
+
+```
+
+  * Quadrant 3
+
+```{r}
+set.seed(42)
+df2_q3_i <- createDataPartition(df2_q3$expert, p=0.8, list=FALSE)
+df2_q3_t <- df2_q3[df2_q3_i,]
+df2_q3_test <- df2_q3[-df2_q3_i,]
+
+df2_q3_ti <- createDataPartition(df2_q3_train$expert, p=0.75, list=FALSE)
+df2_q3_train <- df2_q3_t[df2_q3_ti, ]
+df2_q3_val <- df2_q3_t[-df2_q3_ti, ]
+
+```
+
+  * Quadrant 4
+
+```{r}
+set.seed(42)
+df2_q4_i <- createDataPartition(df2_q4$expert, p=0.8, list=FALSE)
+df2_q4_t <- df2_q4[df2_q4_i,]
+df2_q4_test <- df2_q4[-df2_q4_i,]
+
+df2_q4_ti <- createDataPartition(df2_q4_train$expert, p=0.75, list=FALSE)
+df2_q4_train <- df2_q4_t[df2_q4_ti, ]
+df2_q4_val <- df2_q4_t[-df2_q4_ti, ]
+
+```
+
+
+
+
+
+* Image 3
+
+```{r}
+df3_q1 <- subset(x = t_df3, x >= mean(x) & y >= mean(y))
+df3_q2 <- subset(x = t_df3, x < mean(x) & y >= mean(y))
+df3_q3 <- subset(x = t_df3, x < mean(x) & y < mean(y))
+df3_q4 <- subset(x = t_df3, x >= mean(x) & y < mean(y))
+
+```
+
+
+
+  * Quadrant 1
+
+```{r}
+set.seed(42)
+df3_q1_i <- createDataPartition(df3_q1$expert, p=0.8, list=FALSE)
+df3_q1_t <- df3_q1[df3_q1_i,]
+df3_q1_test <- df3_q1[-df3_q1_i,]
+
+df3_q1_ti <- createDataPartition(df3_q1_train$expert, p=0.75, list=FALSE)
+df3_q1_train <- df3_q1_t[df3_q1_ti, ]
+df3_q1_val <- df3_q1_t[-df3_q1_ti, ]
+
+```
+
+
+
+
+
+  * Quadrant 2
+
+```{r}
+set.seed(42)
+df3_q2_i <- createDataPartition(df3_q2$expert, p=0.8, list=FALSE)
+df3_q2_t <- df3_q2[df3_q2_i,]
+df3_q2_test <- df3_q2[-df3_q2_i,]
+
+df3_q2_ti <- createDataPartition(df3_q2_train$expert, p=0.75, list=FALSE)
+df3_q2_train <- df3_q2_t[df3_q2_ti, ]
+df3_q2_val <- df3_q2_t[-df3_q2_ti, ]
+
+```
+
+  * Quadrant 3
+
+```{r}
+set.seed(42)
+df3_q3_i <- createDataPartition(df3_q3$expert, p=0.8, list=FALSE)
+df3_q3_t <- df3_q3[df3_q3_i,]
+df3_q3_test <- df3_q3[-df3_q3_i,]
+
+df3_q3_ti <- createDataPartition(df3_q3_train$expert, p=0.75, list=FALSE)
+df3_q3_train <- df3_q3_t[df3_q3_ti, ]
+df3_q3_val <- df3_q3_t[-df3_q3_ti, ]
+
+```
+
+  * Quadrant 4
+
+```{r}
+set.seed(42)
+df3_q4_i <- createDataPartition(df3_q4$expert, p=0.8, list=FALSE)
+df3_q4_t <- df3_q4[df3_q4_i,]
+df3_q4_test <- df3_q4[-df3_q4_i,]
+
+df3_q4_ti <- createDataPartition(df3_q4_train$expert, p=0.75, list=FALSE)
+df3_q4_train <- df3_q4_t[df3_q4_ti, ]
+df3_q4_val <- df3_q4_t[-df3_q4_ti, ]
+
+```
+
+
+
+
+```{r}
+train_1 <- rbind(
+  df1_q1_train,
+  df1_q2_train,
+  df1_q3_train,
+  df1_q4_train,
+  
+  df2_q1_train,
+  df2_q2_train,
+  df2_q3_train,
+  df2_q4_train,
+  
+  df3_q1_train,
+  df3_q2_train,
+  df3_q3_train,
+  df3_q4_train
+)
+
+test_1 <- rbind(
+  df1_q1_test,
+  df1_q2_test,
+  df1_q3_test,
+  df1_q4_test,
+  
+  df2_q1_test,
+  df2_q2_test,
+  df2_q3_test,
+  df2_q4_test,
+  
+  df3_q1_test,
+  df3_q2_test,
+  df3_q3_test,
+  df3_q4_test
+)
+  
+val_1 <- rbind(
+  df1_q1_val,
+  df1_q2_val,
+  df1_q3_val,
+  df1_q4_val,
+  
+  df2_q1_val,
+  df2_q2_val,
+  df2_q3_val,
+  df2_q4_val,
+  
+  df3_q1_val,
+  df3_q2_val,
+  df3_q3_val,
+  df3_q4_val
+)
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

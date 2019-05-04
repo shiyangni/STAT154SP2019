@@ -1,0 +1,694 @@
+---
+title: "STAT154Project2"
+author: "ShiyangNi"
+date: "4/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(klaR)
+library(plotly)
+library(scatterplot3d)
+```
+
+
+
+### 1. Data Collection and Exploration (30 pts)
+
+a) Study Summary
+
+b) Data Basics
+
+Each image is of size $382 \times 305$ pixels, and each pixel represents a $275 \times 275m$ window of earth surface. For each pixel, our dataset documents its x,y coordinates, an expert label indicating whether the pixel is clouded, five angular raidance readings from MISR satelitte, and three custom-created features capturing inter-pixel or inter-angular-channel dependencies. 
+
+A quick recreation of the three images is shown below, with black representing pixels not clouded, white clouded and grey not confident enough to judge. As we can see, all three pictures have a rather significant portion of pixels that experts cannot confidently label: image1 has 38% grey, image2 28% and image3 52%. These undetermined pixels contain no useful information about cloud existence, and therefore cannot be used in either training or testing. 
+
+Should we just throw them away? One might be concerned that a simple discard would break spatial/geological dependency, leading to worse paramter estimation. Our counter argument is that for basic Generalized Linear MOdels(logistics, LDA/QDA) that don't explicitly take into account the local interactions between variables(such as by including an interaction term $x_1 * x_2$), __sporadically__ deleting some samples wouldn't degrade the model quality by much. Basic linear paradigms all assume some smooth global relationships between the class posteriors and the features; such global smoothness constraint implies the functions are unlikely to have irregular local behavior. So as long as our remaining samples can loosely cover the feature space, we can afford to delete some samples. _Justificaiton for SVM? Tree-based?_
+
+Of course, a better fix would be to go back to data collection stage, and augment these unlabeled pixels with more meaningful information, such as the confidence level with which the pixel is clouded. Under proper justification from prior knowledge, we might be able to use that confidence level as a surrogate for the class posterior, and produce a more informative model.
+
+c) Visual and Quantitative EDA
+
+_?_
+
+```{r}
+##Loading the data
+header = c("x", "y", "expert_label", "NDAI", "SD", "CORR", "raDF", "raCF", "raBF", "raAF", "raAN")
+image1 = read.table("../data/image1.txt", col.names = header)
+image2 = read.table("../data/image2.txt", col.names = header)
+image3 = read.table("../data/image3.txt", col.names = header)
+##Image Dimensions
+image1$x %>% table() %>% names() %>% length()
+image1$y %>% table() %>% names() %>% length()
+image2$x %>% table() %>% names() %>% length()
+image2$y %>% table() %>% names() %>% length()
+image3$x %>% table() %>% names() %>% length()
+image1$y %>% table() %>% names() %>% length()
+##Clouded pixels
+#Coverage
+mean(image1[,3] == 0)
+mean(image2[,3] == 0)
+mean(image3[,3] == 0)
+#Clouded vs unclouded
+image1_confident = image1[image1[,3] != 0,]
+image2_confident = image2[image2[,3] != 0,]
+image3_confident = image3[image3[,3] != 0,]
+mean(image1_confident[,3] == 1)
+mean(image2_confident[,3] == 1)
+mean(image3_confident[,3] == 1)
+```
+
+
+```{r}
+##Reproducing the pictures
+ggplot(image1) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","grey","white")) + 
+  labs(title = "Image1", xlab = "", ylab = "")
+ggplot(image2) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","grey","white")) + 
+  labs(title = "Image2")
+ggplot(image3) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","grey","white")) + 
+  labs(title = "Image3")
+
+```
+
+
+```{r}
+##Reproducing the confident pictures
+ggplot(image1_confident) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image1_Confident")
+ggplot(image2_confident) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image1_Confident")
+ggplot(image3_confident) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image1_Confident")
+```
+
+
+
+
+### 2. Preparation
+
+a. Data Splitting
+
+- Test Set?
+
+Both ways of splitting uses the entire image3 as the test set. This is to best simulate real-life prediction sceanarios, where the actual test picture always comes in individually. If we had created the test set using partial information from all three images, then we would have introduced some form of spatial correlation between training and test dataset that doesn't exist in a real prediction setting. For models that are able to pick up such correlation, our test set would yield a potentially higher accuracy rate than a real-life test set would.
+
+Why the third image? Because it's the newest. Preservation of temporal order also mimics the real prediction setting, where only old information (image1 and image2) is used to train and validate our model.
+
+The tradeoff is of course we are losing around 30% samples to training. Nevertheless, given that the sample size is already large, we decided to stress the structural integrity of the test set.
+
+- Training vs Validation Set: Method One
+
+Method: Divide each image into four quadrants, so we have 8 quadrants in total. Pick one as validation, and leave the other seven as training.
+
+Rationale: Training set preserves space-based structure; Validation set covers unbalanced cases. 
+
+In analogy to time series data, randomly splitted training data would only partially preserve space-based structures, if such structures do exist. For models that pick up space-based dependency, this would hurt the quality of parameter estimation. If space-based dependency is further explicitly modeled (such as in time series, an AR(1) model), a training set with randomly punched small holes wouldn't satisfy the spacing requirement. By dividing each image quadrant-wise, we're attempting to best preserve any space-based structure.
+
+Our validation set is one quadrant from one image (we use image2's first quadrant here). It's similar to an actual test image in the sense that width and height are shrunk by the same proportion. One possible downfall: due to the sheer size of the clouds, the quadrant might be more heavily covered or exposed by cloud than an actual image. But that doesn't disqualify the quadrant from being a proper validation set: an unbalanced/distorted validation set can identify the model that performs well on unbalanced data. In practice we should expect some test data to be highly imbalanced, as clouds can be very large. Armed with algorithms identifies unbalanced input (judging whether an image is mostly white shouldn't be that hard of a problem to computer vision experts), we can use the winning classifier on unbalanced test data.
+
+- Training vs Validation Set: Method Two
+
+Method: 
+
+Rationale: Generalizing to potentially defected images.
+
+Every coin has two sides. If our future data comes in the exact form (same size, same feature space, similar quality, etc.) as our current data, then we should expect that they are equally capable in preserving any space-based structures. But what if for some reason, such as cameras/sensors aging, our future unlabeled images come with "holes" -- pixels where readings aren't properly recorded? (This isn't an uncommon problem in remote sensing, as indicated by our first project.) Any space-based dependency would be corrupted in the first place, and we would need to extrapolate the missing information. 
+
+In this case, models that don't take into account space-based dependcy might be a better option. Any models that don't address space-based structures should remain robust under randomly splitted data. So we devise a randomized splitting scheme to identify such models.
+
+We randomly sampled from each quadrant an equal amount($\frac{1}{8}$) of pixels, use them for validation, and the rest for training. In this manner, each quadrant is equally represented.
+
+```{r DataSplittingQuadrantwiseNonrandom}
+##Quadrant Non-random split. Validation is first quadrant of second image.
+val_nonrandom = image2_confident[(image2_confident$x > median(image2_confident$x)) & (image2_confident$y) > median(image2_confident$y), ]
+
+ggplot(val_nonrandom) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image2 First Quadrant")
+
+image2_confident_234quadrant = image2_confident[!((image2_confident$x > median(image2_confident$x)) & (image2_confident$y) > median(image2_confident$y)),]
+
+ggplot(image2_confident_234quadrant) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image2 excluding First Quadrant")
+
+train_nonrandom = rbind(image1_confident, image2_confident_234quadrant)
+
+```
+
+```{r}
+training_temp = rbind(image1_confident %>% mutate(picture_number = "one"), image2_confident %>% mutate(picture_number = "two"))
+test = image3_confident
+```
+
+```{r DataSplittingQuadrantwiseRandom}
+size_nontest = nrow(training_temp)
+set.seed(123456)
+val_index_random = sample(1:size_nontest, size_nontest/8)
+val_random = training_temp[val_index_random, ]
+train_random = training_temp[-val_index_random, ]
+##Getting a sense of what our validation data looks like
+ggplot(val_random) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Randomly picked 1/4 of Image2")
+
+```
+
+
+
+b) Null classifier performance
+
+
+```{r TrivialClassifierPerformance}
+mean(val_nonrandom$expert_label == 1)
+mean(val_random$expert_label == 1)
+mean(test$expert_label == 1)
+```
+
+
+c) First order importance -- Pick Three Features
+
+If a feature performs very differently between clouded and not clouded pixels, then it likely has some predictive power. We look at summary statistics for a quick search of suspects. For each potentially influential feature, we histogram its respective distributions among clouded and unclouded pixels, and see if the two distributions are separate enough to give any predictive power.
+
+The mean and median of `NDAI`, `SD` and `CORR` are all significantly higher among clouded pixels than non-clouded pixels. Histograms conditioned on cloud existence also look promisingly separate -- for each of the three features, there exists some non-trivial feature range for which the class posterior $\mathbb{P}(Y = 1|X_j = x)$ (where $X_j$ denotes the jth component the complete feature vector) is dominatingly high. Note that although the separateness of conditional distributions provide some intuitive justification for some thresholding scheme, it doesn't provide the threshold values. We need an in-depth analysis of the class posterior conditioned jointly on the three features to establish proper thresholds.
+
+We find the above patterns using the first two pictures as the training set. In practice the test set always comes as one individual picture, so it's important to make sure what we find here doesn't break down when we are only using one picture. We repeat the histograms in image1 and image2 separately, and see if the pattern still holds. 
+
+Though for both image1 and image2 the conditional distribution of three features are still separate, the pattern is more distinctive in image2 than in image1. This begs the question of to what degree the importance of `NDAI`, `CORR`, and `SD` can be generalized to new pictorial inputs. If we had more pictures, we would algorithimcally test the degree of separateness by developing proper metrics. For this project, we will just settle for what we have.
+
+
+
+```{r}
+##A quick glance at the summary statistics
+training_temp %>% group_by(expert_label) %>% summarise_all(mean) 
+training_temp %>% group_by(expert_label) %>% summarise_all(median)
+```
+
+
+
+```{r HistForCombinedTraining}
+##NDAI
+hist_NDAI = ggplot() + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == 1,], aes(x = NDAI, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == -1,], aes(x = NDAI, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "NDAI in Clouded and Unclouded Pixels") +
+  theme_minimal() 
+
+##SD
+hist_logSD = ggplot() + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == 1,], aes(x = log(SD), fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == -1,], aes(x = log(SD), fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "log(SD) in Clouded and Unclouded Pixels") +
+  theme_minimal()
+
+##CORR
+hist_CORR = ggplot() + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == 1,], aes(x = CORR, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = training_temp[training_temp[,"expert_label"] == -1,], aes(x = CORR, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "CORR in Clouded and Unclouded Pixels") +
+  theme_minimal()
+
+##Presenting them together
+grid.arrange(hist_NDAI, hist_logSD, hist_CORR, nrow = 3)
+```
+
+```{r HistForImage1}
+##NDAI
+hist_NDAI = ggplot() + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == 1,], aes(x = NDAI, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == -1,], aes(x = NDAI, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "NDAI in Clouded and Unclouded Pixels-Image1") +
+  theme_minimal() 
+
+##SD
+hist_logSD = ggplot() + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == 1,], aes(x = log(SD), fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == -1,], aes(x = log(SD), fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "log(SD) in Clouded and Unclouded Pixels-Image1") +
+  theme_minimal()
+
+##CORR
+hist_CORR = ggplot() + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == 1,], aes(x = CORR, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image1_confident[image1_confident[,"expert_label"] == -1,], aes(x = CORR, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "CORR in Clouded and Unclouded Pixels-Image1") +
+  theme_minimal()
+
+##Presenting them together
+grid.arrange(hist_NDAI, hist_logSD, hist_CORR, nrow = 3)
+```
+
+
+```{r HistForImage2}
+##NDAI
+hist_NDAI = ggplot() + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == 1,], aes(x = NDAI, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == -1,], aes(x = NDAI, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "NDAI in Clouded and Unclouded Pixels-Image2") +
+  theme_minimal() 
+
+##SD
+hist_logSD = ggplot() + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == 1,], aes(x = log(SD), fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == -1,], aes(x = log(SD), fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "log(SD) in Clouded and Unclouded Pixels-Image2") +
+  theme_minimal()
+
+##CORR
+hist_CORR = ggplot() + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == 1,], aes(x = CORR, fill = "Clouded"), bins = 70, color = "black", alpha = 0.7) + 
+  geom_histogram(data = image2_confident[image2_confident[,"expert_label"] == -1,], aes(x = CORR, fill = "Not Clouded"), bins = 70, color = "black", alpha = 0.5) + 
+  scale_fill_manual("",breaks = c("Clouded", "Not Clouded"), values = c("#87CEEB","#228B22")) + labs(title = "CORR in Clouded and Unclouded Pixels-Image2") +
+  theme_minimal()
+
+##Presenting them together
+grid.arrange(hist_NDAI, hist_logSD, hist_CORR, nrow = 3)
+```
+
+d) CV function
+
+Please see `report/report.Rmd` or `code/CVgeneric.R` for important limitations on input data types, fold-creation methods, and admissible models. Both copies are identical except that `code/CVgeneric.R` contains some manual testing.
+
+```{r}
+#' @title CVgeneric
+#' @description A generic function that takes in a training set(label, features), a loss function,
+#' a model, and performs K-fold validation across the training set. Folds are created using random
+#' sampling without replacement. 
+#' 
+#' train_labels and train_features are assumed to be in tidy format with mathcing number of rows. 
+#' 
+#' model should be passable into R's built in predict function to generate prediction. 
+#' 
+#' loss function should take in both true labels and estimated labels, and returns an error.
+#' 
+#' Notice we are assuming the labels are named "expert_label".
+#' 
+#' Further Notice we assume the two classes are encoded 0 and 1.
+#' 
+#' @return A list of three: Loss for each fold, Average Loss, and Time consumed for validation.
+
+CVgeneric = function(features, labels, Model, loss, K){
+  require(dplyr)
+  row.names(features) = 1:nrow(features)
+  names(labels) =  1:length(labels)
+  raw_sample_size = nrow(features)
+  ##Assuming K small and sample-size large, minor trimming should be fine.
+  n = raw_sample_size - raw_sample_size %% K
+  fold_size = n / K
+  shuffled_indices = sample(1:n,n, replace = FALSE)
+  fold_belonging = rep(1:K, each = fold_size)
+  ##Book keeping
+  fold_error = rep(0, K)
+  names(fold_error) = paste("Error for fold", seq(1,K))
+  ##Time Recording
+  time_start = Sys.time()
+  for(i in 1:K){
+    ##Book keeping.
+    val_index = shuffled_indices[fold_belonging == i]
+    val_features = features[val_index, ]
+    val_labels = labels[val_index]
+    train_features = features[-val_index, ]
+    train_labels = labels[-val_index]
+    train = cbind(train_labels,train_features)
+    val = cbind(val_labels, val_features)
+    names(train)[1] = "expert_label"
+    names(val)[1] = "expert_label"
+    ##Intelligently using R's built in method. Wahahahaha.
+    updated_model = update(Model, data = train)
+    prediction = predict(updated_model, newdata = val, type = "response")
+    ##Data type stuff. This part for R's built in Logistics Regression prediction.
+    if(!is.list(prediction)){
+      names(prediction) = NULL
+      predicted_labels = prediction
+      predicted_labels[prediction > 0.5] = 1
+      predicted_labels[prediction <= 0.5] = 0
+      }
+    ##This part for RDA model in package klaR.
+    else{
+      predicted_labels = prediction$class
+      }
+    fold_error[i] = loss(predicted_labels, val_labels)
+    }
+  time_end = Sys.time()  
+  average_error_across_fold = mean(fold_error)
+  result = list(FoldLoss = fold_error, AveLoss = average_error_across_fold, 
+                TimeElapsed = (time_end - time_start))
+  return(result)
+}
+
+
+CVgeneric_cloud = function(train, Model, loss, K){
+  labels = train[,"expert_label"]
+  features = train[, which(names(train) != "expert_label")]
+  return(CVgeneric(features, labels, Model, loss, K))
+}
+
+CVSet_nonrandom = function(Model){
+  updated_model = update(Model, data = train_nonrandom)
+  val_labels = val_nonrandom[,"expert_label"]
+  prediction = predict(updated_model, newdata = val_nonrandom, type = "response")
+  if(!is.list(prediction)){
+      names(prediction) = NULL
+      predicted_labels = prediction
+      predicted_labels[prediction > 0.5] = 1
+      predicted_labels[prediction <= 0.5] = 0
+      }
+    ##This part for RDA model in package klaR.
+    else{
+      predicted_labels = prediction$class
+    }
+  CVset_error = classification_error(predicted_labels, val_labels)
+  return(CVset_error)
+}
+
+
+CVSet_random = function(Model){
+  updated_model = update(Model, data = train_random)
+  val_labels = val_random[,"expert_label"]
+  prediction = predict(updated_model, newdata = val_random, type = "response")
+  if(!is.list(prediction)){
+      names(prediction) = NULL
+      predicted_labels = prediction
+      predicted_labels[prediction > 0.5] = 1
+      predicted_labels[prediction <= 0.5] = 0
+      }
+    ##This part for RDA model in package klaR.
+    else{
+      predicted_labels = prediction$class
+    }
+  CVset_error = classification_error(predicted_labels, val_labels)
+  return(CVset_error)
+}
+
+
+classification_error = function(true, predicted){
+  return(mean(true != predicted))
+}
+
+image3_confident[,which(names(image3_confident) != "expert_label")] %>% dim()
+```
+
+
+### 3. Model fitting
+
+a) Model fitting
+
+We're following 4 model-fitting schemes, where each of them is distinguished through different set of hyperparamter(s): 
+  i. Penalized Logistics Regression with both L1 and L2 penalty. This is analgous to elastic net in Regression. Hyperparamters are weights of both penalty, and the overall strength of penalty represented by the sum of weights. 
+  ii. RDA(Regularized Discriminant Analysis), a generalization of LDA/QDA where one adjusts the homogeneity of the shapes of conditional dispersion of features.
+  iii. LDA. We tune the number of features here. This is analagous to what Yuansi did for `AmesHousing`.
+  iv. Random Forest, where ....
+  
+For each scheme, we will choose a basket of hyperparameter values, fit the model for each combination of hyperparamters, check if the assumptions are statisfied, and use cross validation (both K-fold and validation set) to pick the potentially optimal choice of hyperparameters.
+
+We won't touch the test set in this part. This is to ensure the model selection is completely based on using available data, which best mimics a real-life prediction situation.
+
+i. Penalized Logistics Regression
+
+ii. Regularized Discriminant Analysis
+
+Rationale:
+
+LDA model assumes each sample's features are generated through a multivariate mixed-Gaussian, and that their class-conditioned distributions share the same covariance but differ in mean. Geometrically, this means that for each class, any generated data cloud (in feature space, with suffciently large sample size) would be the shape of an ellipsoid, and that such ellipsoids for different classes only differ in mean but not in shape. QDA, on the other hand, allows each class's ellipsoid to have completely different shapes. 
+
+RDA falls in between the spectrum. It models each class's variance using a weighted average of global covaraince and class-specific covariance: $\Sigma_{k}^{RDA} = \alpha\Sigma + (1-\alpha)\Sigma_k$, and thus allows class-specfic ellipsoids to possess flexible degree of homogeninality in shape. Hyperparamter $\alpha$ represents the strength of shape-homogeniality.
+
+We cross-validate over five $\alpha$ values: 0(which yields the LDA model), 0.25, 0.5, 0.75 and 1(which yields the QDA model).
+
+Feature selection: We only use `CORR`, `NDAI` and `log(SD)`(log to disperse the distribution of SD) for RDA fitting. Testing Gaussian-ness in high dimension is hard, but if we keep the dimension of feature to three, we might use some visualization technique to justfiy the Gaussian-ness.  
+
+Testing of Assumptions: Rigorously speaking, we have to test for each class both the Gausian-ness and the iid-ness of features. We did a quick 3D sketch of feature space for clouded pixels (for the randomly splitted validation set), where ellipsoidal dispersion looks reasonable; we also sketched its projections onto pair-wise feature space (graph not included to save space), and the elliptic shapes once again show up. The same pattern is observed among unclouded pixels. We have reasons to believe the Gaussian-need of conditional distribution of features.
+
+The iid assumption is harder to test. For discriminative methods we can look at residuals. How do we do that for generative methods? We don't know. 
+
+Professor Yu mentioned in class that even models that don't satisfy their own assumptions can prove to be useful predictive scheme. So the assumption testing isn't of paramount importance here. We focus on other model selection metrics.
+
+Cross validation: We do two types of cross validation. First one is K-fold, the other one is single validation set. For K-fold, we report the average loss across folds, and also the time consumption. For the validation set approach, we report the errors on two different validation sets, one sampled randomly and the other one not. As we explained in Q2 part a, we expect the non-random set to identify the method's strength over potentially unbalanced data, and the random set for general data.
+
+Computation-wise, all five models perform similarly. For both randomly sampled validation set and the K-fold, RDA with $\alpha = 0$ (which is exactly the LDA model) wins in accuracy. RDA with $\alpha = 0.25$ performs slightly better over unbalanced data. 
+
+We keep these two candidates in mind.
+
+```{r}
+##Model fitting
+rda_0 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 0, crossval = FALSE)
+rda_0.25 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 0.25, crossval = FALSE)
+rda_0.5 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 0.5, crossval = FALSE)
+rda_0.75 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 0.75, crossval = FALSE)
+rda_1 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 1, crossval = FALSE)
+
+
+##5-fold CV
+CVresult_rda0 = CVgeneric_cloud(training_temp, rda_0,loss = classification_error, K = 5)
+CVresult_rda0.25 = CVgeneric_cloud(training_temp, rda_0.25,loss = classification_error, K = 5)
+CVresult_rda0.5 = CVgeneric_cloud(training_temp, rda_0.5,loss = classification_error, K = 5)
+CVresult_rda0.75 = CVgeneric_cloud(training_temp, rda_0.75,loss = classification_error, K = 5)
+CVresult_rda1 = CVgeneric_cloud(training_temp, rda_1,loss = classification_error, K = 5)
+
+rda_CV5fold_result = matrix(0,nrow = 5, ncol = 2)
+rownames(rda_CV5fold_result) = paste0("RDA(alpha = ", c(0,0.25,0.5,0.75,1), ")")
+colnames(rda_CV5fold_result) = c("RDA Average Error", "RDA Time Elasped for five-fold CV(sec)")
+rda_CV5fold_result[1, ] = c(CVresult_rda0$AveLoss, CVresult_rda0$TimeElapsed)
+rda_CV5fold_result[2, ] = c(CVresult_rda0.25$AveLoss, CVresult_rda0.25$TimeElapsed)
+rda_CV5fold_result[3, ] = c(CVresult_rda0.5$AveLoss, CVresult_rda0.5$TimeElapsed)
+rda_CV5fold_result[4, ] = c(CVresult_rda0.75$AveLoss, CVresult_rda0.75$TimeElapsed)
+rda_CV5fold_result[5, ] = c(CVresult_rda1$AveLoss, CVresult_rda1$TimeElapsed)
+
+
+
+##Validation Set
+
+rda_CVset_Result = matrix(0,nrow = 5, ncol = 2)
+rownames(rda_CVset_Result) = paste0("RDA(alpha = ", c(0,0.25,0.5,0.75,1), ")")
+colnames(rda_CVset_Result) = c("RDA Error Non-random", "RDA Error Random")
+
+
+##Non-random
+rda_CVset_Result[1,1] = CVSet_nonrandom(rda_0)
+rda_CVset_Result[2,1] = CVSet_nonrandom(rda_0.25)
+rda_CVset_Result[3,1] = CVSet_nonrandom(rda_0.5)
+rda_CVset_Result[4,1] = CVSet_nonrandom(rda_0.75)
+rda_CVset_Result[5,1] = CVSet_nonrandom(rda_1)
+
+##Random
+rda_CVset_Result[1,2] = CVSet_random(rda_0)
+rda_CVset_Result[2,2] = CVSet_random(rda_0.25)
+rda_CVset_Result[3,2] = CVSet_random(rda_0.5)
+rda_CVset_Result[4,2] = CVSet_random(rda_0.75)
+rda_CVset_Result[5,2] = CVSet_random(rda_1)
+
+rda_CV5fold_result
+rda_CVset_Result
+```
+
+```{r}
+##Visualizing 
+prediction_rda0 = predict(rda_0, newdata = val_random, type = "response")
+prediction_rda0$class
+scatterplot3d(x = val_random[val_random$expert_label == 1,"NDAI"], y = val_random[val_random$expert_label == 1,"CORR"], z = log(val_random[val_random$expert_label == 1,"SD"]), xlab = "NDAI", ylab = "CORR", zlab = "log(SD)", main = "Visualization of clouded pixels' feature")
+```
+
+iii. LDA with feature selection
+
+Does it make sense to only consider the three custom-created features? Would inclusion of geological information(`x` and `y`) help improve the model quality? What about the raw radiation readings?
+
+In this subsection, we attempt to address these natural concerns by cross validating over four models: LDA that only includes custom features, one that has custom+geological features, another one with custom+radiation_reading, and the full model.
+
+Again, computataionally all four models perform similarly. For validation error over generic data, custom+geo model performs best. The LDA that only includes the three custom features only performs best for validation over non-random validation. This means that geological information isn't useless! 
+
+Our winners here are custom+geo and custom.
+```{r}
+##Model fitting
+lda_m1 = rda(expert_label ~ CORR + NDAI + log(SD), data = train_nonrandom, gamma = 0, lambda = 0, crossval = FALSE)
+lda_m2 = rda(expert_label ~ CORR + NDAI + log(SD) + x + y, data = train_nonrandom, gamma = 0, lambda = 0, crossval = FALSE)
+lda_m3 = rda(expert_label ~ .- x - y, data = train_nonrandom, gamma = 0, lambda = 0, crossval = FALSE)
+lda_m4 = rda(expert_label ~ ., data = train_nonrandom, gamma = 0, lambda = 0, crossval = FALSE)
+
+##CV
+##Kfold
+lda_CV5fold_result = matrix(0,nrow = 4, ncol = 2)
+rownames(lda_CV5fold_result) = c("custom", "custom+geo", "custom+reading", "full")
+colnames(lda_CV5fold_result) = c("LDA Average Error", "LDA Time Elasped for five-fold CV(sec)")
+CVresult_ldam1 = CVgeneric_cloud(training_temp, lda_m1, classification_error, 5)
+CVresult_ldam2 = CVgeneric_cloud(training_temp, lda_m2, classification_error, 5)
+CVresult_ldam3 = CVgeneric_cloud(training_temp, lda_m3, classification_error, 5)
+CVresult_ldam4 = CVgeneric_cloud(training_temp, lda_m4, classification_error, 5)
+
+lda_CV5fold_result[1, ] = c(CVresult_ldam1$AveLoss, CVresult_ldam1$TimeElapsed)
+lda_CV5fold_result[2, ] = c(CVresult_ldam2$AveLoss, CVresult_rda0.25$TimeElapsed)
+lda_CV5fold_result[3, ] = c(CVresult_ldam3$AveLoss, CVresult_rda0.5$TimeElapsed)
+lda_CV5fold_result[4, ] = c(CVresult_ldam4$AveLoss, CVresult_rda0.75$TimeElapsed)
+
+
+##Validation Set
+##NonRandom
+lda_CVset_Result = matrix(0,nrow = 4, ncol = 2)
+rownames(lda_CVset_Result) = c("custom", "custom+geo", "custom+reading", "full")
+colnames(lda_CVset_Result) = c("Error Non-Random Validation", "Error Random Validation")
+
+lda_CVset_Result[1,1] = CVSet_nonrandom(lda_m1)
+lda_CVset_Result[2,1] = CVSet_nonrandom(lda_m2)
+lda_CVset_Result[3,1] = CVSet_nonrandom(lda_m3)
+lda_CVset_Result[4,1] = CVSet_nonrandom(lda_m4)
+
+
+##Random
+lda_CVset_Result[1,2] = CVSet_random(lda_m1)
+lda_CVset_Result[2,2] = CVSet_random(lda_m2)
+lda_CVset_Result[3,2] = CVSet_random(lda_m3)
+lda_CVset_Result[4,2] = CVSet_random(lda_m4)
+
+lda_CV5fold_result
+lda_CVset_Result
+```
+
+iv.Random Forest
+
+
+b) ROC curve
+
+ROC curve tells us about a model's false positive and false negative rate. In part a) we picked the models with the best overall error rate (over different validation sets). In this part b) we will use the false positive and false negative rate as a thresholding mechnism -- as long as a candidate model doesn't perform too poorly in terms of type I or type II error, we will regard the model as admissible.
+
+We use the randomly-sampled validation set to calculate the false postive and negative rate for each method. We arbitrarily set both thresholds at 10% = 0.1, meaning if either false positive or false negative rate is higher than 0.1, we discard the model. 
+
+As we don't use ROC curve to pick the threshold, we only display them for the sake of completeness. ROC curves for random forest and logistics regression are shown below. The curves for LDA with tuned features and RDA are similar to that of logistics. 
+
+The table below shows false positive and negative rate. The logistics model has a false positive rate of 0.18, which is higher than our 0.1 bar. We won't use logistics model for prediction purpose.
+
+```{r}
+##Two RDA methods
+true_boolean = (val_random$expert_label == 1)
+false_boolean = (val_random$expert_label != 1)
+pred_rda0_random_val = predict(rda_0, newdata = val_random, type = "response")
+pred_labels_rda0_random_val = pred_rda0_random_val$class
+rda0_false_positive = sum(pred_labels_rda0_random_val[false_boolean] == 1)/sum(false_boolean)
+rda0_false_nagetive = sum(pred_labels_rda0_random_val[true_boolean] != 1)/sum(true_boolean)
+
+pred_rda0.25_random_val = predict(rda_0.25, newdata = val_random, type = "response")
+pred_labels_rda0.25_random_val = pred_rda0.25_random_val$class
+rda0.25_false_positive = sum(pred_labels_rda0.25_random_val[false_boolean] == 1)/sum(false_boolean)
+rda0.25_false_nagetive = sum(pred_labels_rda0.25_random_val[true_boolean] != 1)/sum(true_boolean)
+
+##One LDA feature methods
+pred_lda_m2_random_val = predict(lda_m2, newdata = val_random, type = "response")
+pred_labels_lda_m2_random_val = pred_lda_m2_random_val$class
+lda_m2_false_positive = sum(pred_labels_lda_m2_random_val[false_boolean] == 1)/sum(false_boolean)
+lda_m2_false_nagetive = sum(pred_labels_lda_m2_random_val[true_boolean] != 1)/sum(true_boolean)
+
+
+ROC_result = matrix(c(rda0_false_positive, 
+rda0_false_nagetive,
+rda0.25_false_positive,
+rda0.25_false_nagetive,
+lda_m2_false_positive,
+lda_m2_false_nagetive,
+0.18634108122225124,
+0.07971270458024256,
+0.013874066168623266,
+0.037717335845205854), nrow = 5, ncol = 2, byrow = TRUE)
+rownames(ROC_result) = c("RDA_0", "RDA_0.25", "LDA custom+geo", "Logistics", "RandomForest")
+colnames(ROC_result) =  c("False Positive Rate", "False Negative Rate")
+
+ROC_result
+
+```
+
+
+### 4. In-depth Diagnotics
+
+We did the diagnostics in Part3 using validation set only. In Part4 we reintroduce the test set to see how models perform in real-life setting.
+
+a) Further diagnostics on candidate models
+
+In Part3 we find that Random Forest performs best in accuracy (~97%), but takes about 3min to train (for our validation/training split). LDA and RDA models have slightly lower accuracy (~95%), but their training takes only 40+sec. Penalized logistics is similiar in overall accuracy to linear discriminant models, but its false-positive error is quite high.
+
+In this subsection, we use three metrics: test-time performance, intepretability of features, and stablitiy under perturbed training data.
+
+Test-time Accuracy:
+
+All three RDA models perform way worse on test sets than in validation set, each having error rate over 21%. Even though we arrived at the three linear discriminant models from different thought process(one from feature selection, two from regularization tuning), they are similiar in nature, and in test-time performance. For simplicity's sake we will just use the LDA model with custom+geo features.
+
+The Random Forest model performs relatively better, showing an test-time error rate around 16%. If the goal is accuracy alone, we would recommend Random Forest.
+
+Intepretability & Feature Importance:
+
+The downside of Random Forest is that its paramters aren't readily intepretable. We turn to logistics regression to extract useful information.
+
+Stability under perturbed training data:
+
+We perturb a part of the training image by randomly sampling one percent of useful pixels from image1, and flip their labels. The effects ar shown below. We then re-train the model using perturbed training set, and report its test accuracy. 
+
+It turns out for the LDA model with custom+geo features, the perturbed error is 0.24, a bit lower than the actual error 0.25. We repeat the experiment about ten times, and each time the perturbed error is around 0.24. We can thus conclude that the LDA model is robust under perturbance. 
+
+For Random Forest, the perturbed error falls within the range of 0.12-0.18. For stability purpose, we would recommend the LDA model using custom features + (x,y) corrdinates.
+
+
+```{r TestTimeAccuracy}
+test_pred_rda_0 = predict(rda_0, newdata = test, type = "response")
+testError_rda_0 = mean(test_pred_rda_0$class != test$expert_label)
+test_pred_rda_0.25 = predict(rda_0.25, newdata = test, type = "response")
+testError_rda_0.25 = mean(test_pred_rda_0.25$class != test$expert_label)
+test_pred_lda_m2 = predict(lda_m2, newdata = test, type = "response")
+testError_lda_m2 = mean(test_pred_lda_m2$class != test$expert_label)
+
+testError_rda_0
+testError_rda_0.25
+testError_lda_m2
+```
+
+
+```{r Stability}
+image1_size = nrow(image1_confident)
+perturbed_index = sample(1:image1_size, 0.01*image1_size)
+perturbed_image1 =  image1_confident
+perturbed_image1$expert_label[perturbed_index] = -perturbed_image1$expert_label[perturbed_index]
+
+
+ggplot(image1_confident) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Image 1")
+ggplot(perturbed_image1) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Perturbed Image 1")
+
+trainig_temp_perturbed = rbind(perturbed_image1, image2_confident)
+perturbed_lda_m2 = update(lda_m2, data = training_temp)
+perturbed_lda_m2_prediction = predict(perturbed_lda_m2, newdata = test, type = "response")
+perturbed_error = mean(perturbed_lda_m2_prediction$class != test$expert_label)
+perturbed_error
+```
+
+
+b) Graphical distribution of misclassifications
+
+A comparison between predicted image and the actual test image is shown below. For the LDA model, the error concentrates in two parts: one small patch near the left boundery is falsely positive, and a big patch in the fourth quadrant is false negative. 
+
+
+
+```{r}
+predicted_test_image_plot = ggplot(test) + geom_point(aes(x = x, y = y, color = test_pred_lda_m2$class)) + scale_color_manual(values = c("black","white")) + 
+  labs(title = "Predicted Test Image from LDA (custom+geo)")
+actual_test_image_plot = ggplot(test) + geom_point(aes(x = x, y = y, color = factor(expert_label))) + scale_color_manual(values = c("black","white")) + labs(title = "Actual Test Image")
+grid.arrange(predicted_test_image_plot, actual_test_image_plot)
+
+```
+
+c) Can we improve?
+
+We think that the culprit for such concentrated errors is imbalance in training data. Looking back at image1 and image2, we realize in both images the left patch is mostly white, and the bottm right corners are mostly black. Such problem might be addressed through including more images in the training dataset.
+
+d) Does data splitting matter?
+
+Not by much, as long as we're using image3 as the test set. It makes sense because neither logistics nor RDA models in our implementation contains interaction terms, and thus ignore any space-based structures.
+
+e) Conclusion
+
+For accuracy, use Random Forest.
+
+For stability, use LDA.
+
+For intepretability, use logistics.
+
+Include more images in training to avoid concentrated errors.
