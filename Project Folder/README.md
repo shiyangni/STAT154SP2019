@@ -1,5 +1,4 @@
-## STAT154 Machine Learning SP2019
-## Project 2
+## SP2019 STAT154 Machine Learning Project 2
 
 - Introduction
 
