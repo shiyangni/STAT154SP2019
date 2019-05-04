@@ -1,11 +1,11 @@
 ## STAT154 Machine Learning SP2019
 ## Project 2
 
-### Introduction
+- Introduction
 
 A comprehensive practice on building and critiquing binary classifiers. 
 
-### Reproducibility
+- Reproducibility
 
 To recreate the report, simply download the `Project Folder`, open `Project Folder/report/Report.Rmd`, and Knit. 
 
