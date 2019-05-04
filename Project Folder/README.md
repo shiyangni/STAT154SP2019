@@ -12,6 +12,10 @@ There is only minor content change between the final report in PDF format and th
 
 Most code is written in R. Some models are implemented in Python for speed purpose. We included the Python output in `Report.Rmd` using assignment statements. For raw Python outputs, please see relevant code under `Project Folder/code`.
 
+- Viewing Order
+
+See `Project Folder/Report.pdf` for finalized report. Refer to `Project Folder/report/Report.Rmd` for complete source code.
+
 #### 1 Data Collection and Exploration
 
 * Load the txt files for the three images with the code in *STAT154Project2.Rmd* file using read.table
